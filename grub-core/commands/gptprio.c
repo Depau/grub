@@ -78,7 +78,7 @@ grub_find_next (const char *disk_name,
 		const grub_gpt_part_type_t *part_type,
 		char **part_name, char **part_guid)
 {
-  struct grub_gpt_partentry *part_found = NULL;
+  struct grub_gpt_partentry *part, *part_found = NULL;
   grub_device_t dev = NULL;
   grub_gpt_t gpt = NULL;
   grub_uint32_t i, part_index;
@@ -91,14 +91,11 @@ grub_find_next (const char *disk_name,
   if (!gpt)
     goto done;
 
-  if (!(gpt->status & GRUB_GPT_BOTH_VALID))
-    if (grub_gpt_repair (dev->disk, gpt))
-      goto done;
+  if (grub_gpt_repair (dev->disk, gpt))
+    goto done;
 
-  for (i = 0; i < grub_le_to_cpu32 (gpt->primary.maxpart); i++)
+  for (i = 0; (part = grub_gpt_get_partentry (gpt, i)) != NULL; i++)
     {
-      struct grub_gpt_partentry *part = &gpt->entries[i];
-
       if (grub_memcmp (part_type, &part->type, sizeof (*part_type)) == 0)
 	{
 	  unsigned int priority, tries_left, successful, old_priority = 0;
@@ -130,7 +127,7 @@ grub_find_next (const char *disk_name,
 
       grub_gptprio_set_tries_left (part_found, tries_left - 1);
 
-      if (grub_gpt_update_checksums (gpt))
+      if (grub_gpt_update (gpt))
 	goto done;
 
       if (grub_gpt_write (dev->disk, gpt))

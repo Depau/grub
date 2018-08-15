@@ -36,8 +36,8 @@
 #include <grub/lib/cmdline.h>
 #include <grub/linux.h>
 #include <grub/tpm.h>
+#include <grub/verity-hash.h>
 
-#include "verity-hash.h"
 GRUB_MOD_LICENSE ("GPLv3+");
 
 #ifdef GRUB_MACHINE_PCBIOS
@@ -719,6 +719,7 @@ grub_cmd_linux (grub_command_t cmd __attribute__ ((unused)),
     }
 
   grub_tpm_measure (kernel, len, GRUB_BINARY_PCR, "grub_linux", "Kernel");
+  grub_print_error();
 
   grub_memcpy (&lh, kernel, sizeof (lh));
 
@@ -928,8 +929,8 @@ grub_cmd_linux (grub_command_t cmd __attribute__ ((unused)),
 	    grub_env_set ("gfxpayload", "text");
 	    grub_printf_ (N_("%s is deprecated. "
 			     "Use set gfxpayload=%s before "
-			     "linux command instead.\n"), "text",
-			  argv[i]);
+			     "linux command instead.\n"),
+			  argv[i], "text");
 	    break;
 
 	  case 1:
@@ -938,8 +939,8 @@ grub_cmd_linux (grub_command_t cmd __attribute__ ((unused)),
 	    grub_env_set ("gfxpayload", "text");
 	    grub_printf_ (N_("%s is deprecated. "
 			     "Use set gfxpayload=%s before "
-			     "linux command instead.\n"), "text",
-			  argv[i]);
+			     "linux command instead.\n"),
+			  argv[i], "text");
 	    break;
 	  default:
 	    /* Ignore invalid values.  */
@@ -997,10 +998,13 @@ grub_cmd_linux (grub_command_t cmd __attribute__ ((unused)),
 	      {
 	      case 'g':
 		shift += 10;
+		/* FALLTHROUGH */
 	      case 'm':
 		shift += 10;
+		/* FALLTHROUGH */
 	      case 'k':
 		shift += 10;
+		/* FALLTHROUGH */
 	      default:
 		break;
 	      }
@@ -1028,7 +1032,7 @@ grub_cmd_linux (grub_command_t cmd __attribute__ ((unused)),
 			      maximal_cmdline_size
 			      - (sizeof (LINUX_IMAGE) - 1));
 
-  grub_pass_verity_hash(&lh, linux_cmdline);
+  grub_pass_verity_hash(&lh, linux_cmdline, maximal_cmdline_size);
   len = prot_file_size;
   grub_memcpy (prot_mode_mem, kernel + kernel_offset, len);
   kernel_offset += len;

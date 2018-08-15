@@ -25,6 +25,24 @@
 #include <grub/net/udp.h>
 #include <grub/datetime.h>
 
+#if !defined(GRUB_MACHINE_EFI) && (defined(__i386__) || defined(__x86_64__))
+#define GRUB_NET_BOOTP_ARCH 0x0000
+#elif defined(GRUB_MACHINE_EFI) && defined(__x86_64__)
+#define GRUB_NET_BOOTP_ARCH 0x0007
+#elif defined(GRUB_MACHINE_EFI) && defined(__aarch64__)
+#define GRUB_NET_BOOTP_ARCH 0x000B
+#else
+#error "unknown bootp architecture"
+#endif
+
+static grub_uint8_t dhcp_option_header[] = {GRUB_NET_BOOTP_RFC1048_MAGIC_0,
+					    GRUB_NET_BOOTP_RFC1048_MAGIC_1,
+					    GRUB_NET_BOOTP_RFC1048_MAGIC_2,
+					    GRUB_NET_BOOTP_RFC1048_MAGIC_3};
+static grub_uint8_t grub_userclass[] = {0x4D, 0x06, 0x05, 'G', 'R', 'U', 'B', '2'};
+static grub_uint8_t grub_dhcpdiscover[] = {0x35, 0x01, 0x01};
+static grub_uint8_t grub_dhcptime[] = {0x33, 0x04, 0x00, 0x00, 0x0e, 0x10};
+
 static void
 parse_dhcp_vendor (const char *name, const void *vend, int limit, int *mask)
 {
@@ -82,7 +100,7 @@ parse_dhcp_vendor (const char *name, const void *vend, int limit, int *mask)
 	      grub_memcpy (&gw.ipv4, ptr, sizeof (gw.ipv4));
 	      rname = grub_xasprintf ("%s:default", name);
 	      if (rname)
-		grub_net_add_route_gw (rname, target, gw);
+		grub_net_add_route_gw (rname, target, gw, NULL);
 	      grub_free (rname);
 	    }
 	  break;
@@ -142,6 +160,7 @@ grub_net_configure_by_dhcp_ack (const char *name,
   grub_net_link_level_address_t hwaddr;
   struct grub_net_network_level_interface *inter;
   int mask = -1;
+  char server_ip[sizeof ("xxx.xxx.xxx.xxx")];
 
   addr.type = GRUB_NET_NETWORK_LEVEL_PROTOCOL_IPV4;
   addr.ipv4 = bp->your_ip;
@@ -157,6 +176,9 @@ grub_net_configure_by_dhcp_ack (const char *name,
   hwaddr.type = GRUB_NET_LINK_LEVEL_PROTOCOL_ETHERNET;
 
   inter = grub_net_add_addr (name, card, &addr, &hwaddr, flags);
+  if (!inter)
+    return 0;
+
 #if 0
   /* This is likely based on misunderstanding. gateway_ip refers to
      address of BOOTP relay and should not be used after BOOTP transaction
@@ -189,15 +211,22 @@ grub_net_configure_by_dhcp_ack (const char *name,
   if (size > OFFSET_OF (boot_file, bp))
     grub_env_set_net_property (name, "boot_file", bp->boot_file,
                                sizeof (bp->boot_file));
+  if (bp->server_ip)
+    {
+      grub_snprintf (server_ip, sizeof (server_ip), "%d.%d.%d.%d",
+		     ((grub_uint8_t *) &bp->server_ip)[0],
+		     ((grub_uint8_t *) &bp->server_ip)[1],
+		     ((grub_uint8_t *) &bp->server_ip)[2],
+		     ((grub_uint8_t *) &bp->server_ip)[3]);
+      grub_env_set_net_property (name, "next_server", server_ip, sizeof (server_ip));
+      grub_print_error ();
+    }
+
   if (is_def)
     grub_net_default_server = 0;
   if (is_def && !grub_net_default_server && bp->server_ip)
     {
-      grub_net_default_server = grub_xasprintf ("%d.%d.%d.%d",
-						((grub_uint8_t *) &bp->server_ip)[0],
-						((grub_uint8_t *) &bp->server_ip)[1],
-						((grub_uint8_t *) &bp->server_ip)[2],
-						((grub_uint8_t *) &bp->server_ip)[3]);
+      grub_net_default_server = grub_strdup (server_ip);
       grub_print_error ();
     }
 
@@ -209,11 +238,7 @@ grub_net_configure_by_dhcp_ack (const char *name,
 
   if (device && !*device && bp->server_ip)
     {
-      *device = grub_xasprintf ("tftp,%d.%d.%d.%d",
-				((grub_uint8_t *) &bp->server_ip)[0],
-				((grub_uint8_t *) &bp->server_ip)[1],
-				((grub_uint8_t *) &bp->server_ip)[2],
-				((grub_uint8_t *) &bp->server_ip)[3]);
+      *device = grub_xasprintf ("tftp,%s", server_ip);
       grub_print_error ();
     }
   if (size > OFFSET_OF (server_name, bp)
@@ -368,6 +393,7 @@ grub_cmd_dhcpopt (struct grub_command *cmd __attribute__ ((unused)),
 
   if (grub_strcmp (args[3], "string") == 0)
     {
+      grub_err_t err = GRUB_ERR_NONE;
       char *val = grub_malloc (taglength + 1);
       if (!val)
 	return grub_errno;
@@ -376,8 +402,9 @@ grub_cmd_dhcpopt (struct grub_command *cmd __attribute__ ((unused)),
       if (args[0][0] == '-' && args[0][1] == 0)
 	grub_printf ("%s\n", val);
       else
-	return grub_env_set (args[0], val);
-      return GRUB_ERR_NONE;
+	err = grub_env_set (args[0], val);
+      grub_free (val);
+      return err;
     }
 
   if (grub_strcmp (args[3], "number") == 0)
@@ -399,6 +426,7 @@ grub_cmd_dhcpopt (struct grub_command *cmd __attribute__ ((unused)),
 
   if (grub_strcmp (args[3], "hex") == 0)
     {
+      grub_err_t err = GRUB_ERR_NONE;
       char *val = grub_malloc (2 * taglength + 1);
       int i;
       if (!val)
@@ -412,8 +440,9 @@ grub_cmd_dhcpopt (struct grub_command *cmd __attribute__ ((unused)),
       if (args[0][0] == '-' && args[0][1] == 0)
 	grub_printf ("%s\n", val);
       else
-	return grub_env_set (args[0], val);
-      return GRUB_ERR_NONE;
+	err = grub_env_set (args[0], val);
+      grub_free (val);
+      return err;
     }
 
   return grub_error (GRUB_ERR_BAD_ARGUMENT,
@@ -488,10 +517,14 @@ grub_cmd_bootp (struct grub_command *cmd __attribute__ ((unused)),
 	  struct udphdr *udph;
 	  grub_net_network_level_address_t target;
 	  grub_net_link_level_address_t ll_target;
+	  grub_uint8_t *offset;
 
 	  if (!ifaces[j].prev)
 	    continue;
-	  nb = grub_netbuff_alloc (sizeof (*pack) + 64 + 128);
+	  nb = grub_netbuff_alloc (sizeof (*pack) + sizeof(dhcp_option_header)
+				   + sizeof(grub_userclass)
+				   + sizeof(grub_dhcpdiscover)
+				   + sizeof(grub_dhcptime) + 64 + 128);
 	  if (!nb)
 	    {
 	      grub_netbuff_free (nb);
@@ -525,6 +558,24 @@ grub_cmd_bootp (struct grub_command *cmd __attribute__ ((unused)),
 	  pack->seconds = grub_cpu_to_be16 (t);
 
 	  grub_memcpy (&pack->mac_addr, &ifaces[j].hwaddress.mac, 6); 
+	  offset = (grub_uint8_t *)&pack->vendor;
+	  grub_memcpy (offset, dhcp_option_header, sizeof(dhcp_option_header));
+	  offset += sizeof(dhcp_option_header);
+	  grub_memcpy (offset, grub_dhcpdiscover, sizeof(grub_dhcpdiscover));
+	  offset += sizeof(grub_dhcpdiscover);
+	  grub_memcpy (offset, grub_userclass, sizeof(grub_userclass));
+	  offset += sizeof(grub_userclass);
+	  grub_memcpy (offset, grub_dhcptime, sizeof(grub_dhcptime));
+
+	  /* insert Client System Architecture (option 93) */
+	  offset += sizeof(grub_dhcptime);
+	  offset[0] = 93;
+	  offset[1] = 2;
+	  offset[2] = (GRUB_NET_BOOTP_ARCH >> 8);
+	  offset[3] = (GRUB_NET_BOOTP_ARCH & 0xFF);
+
+	  /* option terminator */
+	  offset[4] = 255;
 
 	  grub_netbuff_push (nb, sizeof (*udph));
 

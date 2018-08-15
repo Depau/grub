@@ -238,6 +238,15 @@ recv_hook (grub_net_udp_socket_t sock __attribute__ ((unused)),
   char *redirect_save = NULL;
   grub_uint32_t ttl_all = ~0U;
 
+  /* Code apparently assumed that only one packet is received as response.
+     We may get multiple responses due to network condition, so check here
+     and quit early. */
+  if (*data->addresses)
+    {
+      grub_netbuff_free (nb);
+      return GRUB_ERR_NONE;
+    }
+
   head = (struct dns_header *) nb->data;
   ptr = (grub_uint8_t *) (head + 1);
   if (ptr >= nb->tail)
@@ -276,8 +285,8 @@ recv_hook (grub_net_udp_socket_t sock __attribute__ ((unused)),
       ptr++;
       ptr += 4;
     }
-  *data->addresses = grub_malloc (sizeof ((*data->addresses)[0])
-				 * grub_be_to_cpu16 (head->ancount));
+  *data->addresses = grub_realloc (*data->addresses, sizeof ((*data->addresses)[0])
+		     * (grub_be_to_cpu16 (head->ancount) + *data->naddresses));
   if (!*data->addresses)
     {
       grub_errno = GRUB_ERR_NONE;

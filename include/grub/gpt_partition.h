@@ -151,22 +151,14 @@ grub_gpt_partition_map_iterate (grub_disk_t disk,
 				void *hook_data);
 
 /* Advanced GPT library.  */
-typedef enum grub_gpt_status
-  {
-    GRUB_GPT_PROTECTIVE_MBR         = 0x01,
-    GRUB_GPT_HYBRID_MBR             = 0x02,
-    GRUB_GPT_PRIMARY_HEADER_VALID   = 0x04,
-    GRUB_GPT_PRIMARY_ENTRIES_VALID  = 0x08,
-    GRUB_GPT_BACKUP_HEADER_VALID    = 0x10,
-    GRUB_GPT_BACKUP_ENTRIES_VALID   = 0x20,
-  } grub_gpt_status_t;
 
-#define GRUB_GPT_MBR_VALID (GRUB_GPT_PROTECTIVE_MBR|GRUB_GPT_HYBRID_MBR)
-#define GRUB_GPT_PRIMARY_VALID \
-  (GRUB_GPT_PRIMARY_HEADER_VALID|GRUB_GPT_PRIMARY_ENTRIES_VALID)
-#define GRUB_GPT_BACKUP_VALID \
-  (GRUB_GPT_BACKUP_HEADER_VALID|GRUB_GPT_BACKUP_ENTRIES_VALID)
-#define GRUB_GPT_BOTH_VALID (GRUB_GPT_PRIMARY_VALID|GRUB_GPT_BACKUP_VALID)
+/* Status bits for the grub_gpt.status field.  */
+#define GRUB_GPT_PROTECTIVE_MBR		0x01
+#define GRUB_GPT_HYBRID_MBR		0x02
+#define GRUB_GPT_PRIMARY_HEADER_VALID	0x04
+#define GRUB_GPT_PRIMARY_ENTRIES_VALID	0x08
+#define GRUB_GPT_BACKUP_HEADER_VALID	0x10
+#define GRUB_GPT_BACKUP_ENTRIES_VALID	0x20
 
 /* UEFI requires the entries table to be at least 16384 bytes for a
  * total of 128 entries given the standard 128 byte entry size.  */
@@ -177,7 +169,7 @@ typedef enum grub_gpt_status
 struct grub_gpt
 {
   /* Bit field indicating which structures on disk are valid.  */
-  grub_gpt_status_t status;
+  unsigned status;
 
   /* Protective or hybrid MBR.  */
   struct grub_msdos_partition_mbr mbr;
@@ -186,14 +178,44 @@ struct grub_gpt
   struct grub_gpt_header primary;
   struct grub_gpt_header backup;
 
-  /* Only need one entries table, on disk both copies are identical.  */
-  struct grub_gpt_partentry *entries;
+  /* Only need one entries table, on disk both copies are identical.
+   * The on disk entry size may be larger than our partentry struct so
+   * the table cannot be indexed directly.  */
+  void *entries;
   grub_size_t entries_size;
 
   /* Logarithm of sector size, in case GPT and disk driver disagree.  */
   unsigned int log_sector_size;
 };
 typedef struct grub_gpt *grub_gpt_t;
+
+/* Helpers for checking the gpt status field.  */
+static inline int
+grub_gpt_mbr_valid (grub_gpt_t gpt)
+{
+  return ((gpt->status & GRUB_GPT_PROTECTIVE_MBR) ||
+	  (gpt->status & GRUB_GPT_HYBRID_MBR));
+}
+
+static inline int
+grub_gpt_primary_valid (grub_gpt_t gpt)
+{
+  return ((gpt->status & GRUB_GPT_PRIMARY_HEADER_VALID) &&
+	  (gpt->status & GRUB_GPT_PRIMARY_ENTRIES_VALID));
+}
+
+static inline int
+grub_gpt_backup_valid (grub_gpt_t gpt)
+{
+  return ((gpt->status & GRUB_GPT_BACKUP_HEADER_VALID) &&
+	  (gpt->status & GRUB_GPT_BACKUP_ENTRIES_VALID));
+}
+
+static inline int
+grub_gpt_both_valid (grub_gpt_t gpt)
+{
+  return grub_gpt_primary_valid (gpt) && grub_gpt_backup_valid (gpt);
+}
 
 /* Translate GPT sectors to GRUB's 512 byte block addresses.  */
 static inline grub_disk_addr_t
@@ -205,11 +227,17 @@ grub_gpt_sector_to_addr (grub_gpt_t gpt, grub_uint64_t sector)
 /* Allocates and fills new grub_gpt structure, free with grub_gpt_free.  */
 grub_gpt_t grub_gpt_read (grub_disk_t disk);
 
-/* Sync up primary and backup headers, recompute checksums.  */
+/* Helper for indexing into the entries table.
+ * Returns NULL when the end of the table has been reached.  */
+struct grub_gpt_partentry * grub_gpt_get_partentry (grub_gpt_t gpt,
+						    grub_uint32_t n);
+
+/* Sync and update primary and backup headers if either are invalid.  */
 grub_err_t grub_gpt_repair (grub_disk_t disk, grub_gpt_t gpt);
 
-/* Recompute checksums, must be called after modifying GPT data.  */
-grub_err_t grub_gpt_update_checksums (grub_gpt_t gpt);
+/* Recompute checksums and revalidate everything, must be called after
+ * modifying any GPT data.  */
+grub_err_t grub_gpt_update (grub_gpt_t gpt);
 
 /* Write headers and entry tables back to disk.  */
 grub_err_t grub_gpt_write (grub_disk_t disk, grub_gpt_t gpt);
